@@ -499,7 +499,12 @@ PLISTEOF
 success "Entitlements written"
 
 # ── 11. Write PyInstaller hooks ───────────────────────────────────────────────
+# Always start from a clean directory -- it's generated output, not tracked by
+# git, so a stale hook file left over from a previous version of this script
+# (e.g. an old hook-cv2.py) would otherwise silently keep shadowing the
+# correct hook from pyinstaller-hooks-contrib on every subsequent run.
 info "Writing hooks..."
+rm -rf "${SCRIPT_DIR}/hooks"
 mkdir -p "${SCRIPT_DIR}/hooks"
 
 cat > "${SCRIPT_DIR}/hooks/hook-bCNC.py" << 'HOOKEOF'
