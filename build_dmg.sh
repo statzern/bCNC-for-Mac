@@ -143,18 +143,26 @@ import Utils
 
 try:
     import cv2 as cv
-except ImportError:
+except Exception:
+    import traceback
+    print("Unable to import cv2 (OpenCV) - camera will be disabled:")
+    traceback.print_exc()
     cv = None
 
 try:
     import numpy as np
-except ImportError:
+except Exception:
+    import traceback
+    print("Unable to import numpy - camera will be disabled:")
+    traceback.print_exc()
     np = None
 
 try:
     from PIL import Image, ImageTk
-except ImportError:
-    print("Unable to import Image, ImageTk from Pillow")
+except Exception:
+    import traceback
+    print("Unable to import Image, ImageTk from Pillow - camera will be disabled:")
+    traceback.print_exc()
     cv = None
 
 
