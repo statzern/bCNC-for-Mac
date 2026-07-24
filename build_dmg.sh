@@ -420,6 +420,35 @@ if os.path.isdir(cv2_path) and cv2_path not in sys.path:
 # class-definition time before Utils.initTranslator() has run
 builtins._ = lambda x: x
 
+# Tcl/Tk 9.0 removed the legacy "trace variable/vdelete/vinfo" Tcl commands,
+# keeping only "trace add/remove/info". bCNC's CNCCanvas.py (and possibly
+# other modules) still call the deprecated tkinter Variable.trace()/
+# trace_variable() methods, which issue the old Tcl syntax and now raise
+# TclError: bad option "variable". Redirect them to the modern trace_add()/
+# trace_remove()/trace_info(), which take the same callback signature.
+import tkinter
+
+_TRACE_MODE_TO_NEW = {"r": "read", "w": "write", "u": "unset"}
+_TRACE_MODE_TO_OLD = {v: k for k, v in _TRACE_MODE_TO_NEW.items()}
+
+def _trace_variable_compat(self, mode, callback):
+    return self.trace_add(_TRACE_MODE_TO_NEW.get(mode, mode), callback)
+
+def _trace_compat(self, mode, callback):
+    return _trace_variable_compat(self, mode, callback)
+
+def _trace_vdelete_compat(self, mode, cbname):
+    self.trace_remove(_TRACE_MODE_TO_NEW.get(mode, mode), cbname)
+
+def _trace_vinfo_compat(self):
+    return [(_TRACE_MODE_TO_OLD.get(m[0], m[0]) if len(m) == 1 else m, cb)
+            for m, cb in self.trace_info()]
+
+tkinter.Variable.trace_variable = _trace_variable_compat
+tkinter.Variable.trace = _trace_compat
+tkinter.Variable.trace_vdelete = _trace_vdelete_compat
+tkinter.Variable.trace_vinfo = _trace_vinfo_compat
+
 # Patch Utils.prgpath before bCNC reads it — it sets prgpath = dirname(__file__)
 # at import time which resolves to MacOS/, but assets live in Resources/bCNC/
 import Utils
@@ -512,9 +541,8 @@ hidden = [
     'PIL.BmpImagePlugin', 'PIL.PngImagePlugin',
     'PIL.JpegImagePlugin', 'PIL.GifImagePlugin', 'PIL.ImageFont',
     'numpy', 'numpy.core',
-    'svgelements', 'shxparser',
     'configparser', 'queue', 'threading', 'socket', 'http.server',
-] + collect_submodules('bCNC')
+] + collect_submodules('bCNC') + collect_submodules('svgelements') + collect_submodules('shxparser')
 
 a = Analysis(
     ['${SCRIPT_DIR}/bcnc_launcher.py'],
