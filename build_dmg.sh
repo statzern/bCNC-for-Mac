@@ -452,6 +452,36 @@ else
     warn "Could not find the camera refresh interval to patch (bCNC internals may have changed) -- leaving default 10fps"
 fi
 
+# ── 7c. Set default camera rotation/scale ────────────────────────────────────
+# aligncam_scale ships as 10.0 (pixels/unit) and aligncam_rotation isn't
+# present at all in bCNC.ini's [Camera] section (so it already falls back to
+# 0 via Utils.getFloat's own default) -- set both explicitly to the requested
+# defaults. This only affects the bundled defaults (Utils.iniSystem); a
+# per-user ~/.bCNC from an earlier run still overrides these for anyone who
+# already saved different values via the Probe > Camera page.
+info "Setting default camera rotation=0, scale=0.8..."
+BCNC_INI_PATH="${BCNC_PATH}/bCNC.ini"
+if grep -q 'aligncam_scale  = 10.0' "$BCNC_INI_PATH"; then
+    "$PY" - "$BCNC_INI_PATH" << 'PATCHEOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+patched = src.replace(
+    "aligncam_scale  = 10.0",
+    "aligncam_scale  = 0.8",
+).replace(
+    "aligncam_angle  = 0\n",
+    "aligncam_angle  = 0\naligncam_rotation = 0\n",
+)
+with open(path, "w") as f:
+    f.write(patched)
+PATCHEOF
+    success "Camera defaults set (rotation=0, scale=0.8)"
+else
+    warn "Could not find the camera ini defaults to patch (bCNC internals may have changed) -- leaving built-in defaults"
+fi
+
 # ── 8. Generate icon ──────────────────────────────────────────────────────────
 info "Generating icon..."
 mkdir -p "${BUILD_DIR}"
