@@ -46,27 +46,48 @@ else
 fi
 
 # ── 2. Python ─────────────────────────────────────────────────────────────────
-info "Locating Python 3.11–3.14..."
-PYTHON=""
-for candidate in python3.13 python3.12 python3.14 python3.11 python3; do
-    if command -v "$candidate" &>/dev/null; then
-        ver=$("$candidate" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        major="${ver%%.*}"; minor="${ver##*.}"
-        if [[ "$major" -eq 3 && "$minor" -ge 11 && "$minor" -le 14 ]]; then
-            PYTHON=$(command -v "$candidate")
-            info "Using Python: $PYTHON ($ver)"
-            break
-        fi
-    fi
-done
-[[ -n "$PYTHON" ]] || die "Python 3.11–3.14 not found.\n  Install: brew install python@3.13"
-
-info "Checking Python architecture matches host (${ARCH})..."
-PY_ARCH=$("$PYTHON" -c "import platform; print(platform.machine())")
-if [[ "$PY_ARCH" != "$ARCH" ]]; then
-    die "Python at ${PYTHON} is ${PY_ARCH}, but this Mac is ${ARCH}.\n  Building with a ${PY_ARCH} Python produces a ${PY_ARCH} app that runs under\n  Rosetta translation on ${ARCH} — Tk 9.0's macOS menu code aborts when run\n  translated, crashing bCNC on launch.\n  Fix: install a native ${ARCH} Python, e.g. via Homebrew at $( [[ "$ARCH" == "arm64" ]] && echo /opt/homebrew || echo /usr/local ):\n    brew install python@3.13 python-tk@3.13\n  and make sure that Homebrew's bin directory comes first in \$PATH\n  (check with: which -a python3.13)."
+# A differently-arched Python earlier in $PATH (e.g. an Intel Homebrew still
+# lingering on an Apple Silicon Mac) would otherwise get picked, producing a
+# Rosetta-translated app — Tk 9.0's macOS menu code aborts when translated.
+# So every candidate is checked for a native-arch match, not just the first
+# one found; the native Homebrew prefix is searched first, then the rest of
+# $PATH, and any wrong-arch hits are skipped rather than accepted.
+if [[ "$ARCH" == "arm64" ]]; then
+    NATIVE_PREFIX="/opt/homebrew"
+else
+    NATIVE_PREFIX="/usr/local"
 fi
-success "Python architecture OK (${PY_ARCH})"
+
+info "Locating a native ${ARCH} Python 3.11–3.14..."
+IFS=':' read -ra PATH_DIRS <<< "$PATH"
+SEARCH_DIRS=("${NATIVE_PREFIX}/bin" "${PATH_DIRS[@]}")
+
+PYTHON=""
+FOUND_WRONG_ARCH=""
+for candidate in python3.13 python3.12 python3.14 python3.11; do
+    for dir in "${SEARCH_DIRS[@]}"; do
+        bin="${dir}/${candidate}"
+        [[ -x "$bin" ]] || continue
+        ver=$("$bin" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null) || continue
+        major="${ver%%.*}"; minor="${ver##*.}"
+        [[ "$major" -eq 3 && "$minor" -ge 11 && "$minor" -le 14 ]] || continue
+        py_arch=$("$bin" -c "import platform; print(platform.machine())" 2>/dev/null)
+        if [[ "$py_arch" == "$ARCH" ]]; then
+            PYTHON="$bin"
+            info "Using native Python: $PYTHON ($ver, ${py_arch})"
+            break 2
+        else
+            FOUND_WRONG_ARCH="${bin} (${py_arch})"
+        fi
+    done
+done
+
+if [[ -z "$PYTHON" ]]; then
+    extra=""
+    [[ -n "$FOUND_WRONG_ARCH" ]] && extra="\n  Found ${FOUND_WRONG_ARCH} but it doesn't match this Mac's arch (${ARCH})."
+    die "No native ${ARCH} Python 3.11–3.14 found.${extra}\n  Install: brew install python@3.13 python-tk@3.13\n  (native ${ARCH} Homebrew lives at ${NATIVE_PREFIX})"
+fi
+success "Python architecture OK (native ${ARCH})"
 
 info "Checking tkinter..."
 "$PYTHON" -c "import tkinter" 2>/dev/null \

@@ -76,7 +76,7 @@ After installing, reconnect the controller and look for `/dev/cu.usbserial-*` in
 | Symptom | Fix |
 |---------|-----|
 | "App is damaged" | `xattr -cr /Applications/bCNC.app` in Terminal |
-| Crashes on launch (Apple Silicon) with a Tk/`NSMenuItem` abort in the crash log | The app was built with an x86_64 Python and is running translated under Rosetta — Tk 9.0's macOS menu code aborts when translated. Rebuild with a native arm64 Python (`brew install python@3.13 python-tk@3.13` under `/opt/homebrew`, and make sure that's first in `$PATH`). The script now checks for this and refuses to build a mismatched-arch app. |
+| Crashes on launch (Apple Silicon) with a Tk/`NSMenuItem` abort in the crash log | The app was built with an x86_64 Python and is running translated under Rosetta — Tk 9.0's macOS menu code aborts when translated. The script auto-detects and prefers a native-arch Python (checking `/opt/homebrew` on arm64 first, ignoring any x86_64 Python earlier in `$PATH`); if it still can't find one, run `brew install python@3.13 python-tk@3.13` to install the native version. |
 | Camera not working | System Settings → Privacy & Security → Camera → enable bCNC |
 | Serial port missing | Install USB driver above, reconnect |
 | Build fails: tkinter | `brew install python-tk@3.13` |
