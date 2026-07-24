@@ -185,6 +185,17 @@ class Camera:
         self._lock    = threading.Lock()
         self._thread  = None
         self._running = False
+        # The capture thread only ever writes _raw/_raw_seq; canny()/resize()
+        # are the sole consumers that turn the latest raw frame into
+        # self.image, exactly once per new frame (see _pull_latest). This
+        # keeps self.image stable for the whole UI tick -- previously the
+        # capture thread wrote self.image directly and could overwrite an
+        # already-resized frame with a fresh full-resolution one in the
+        # window between CNCCanvas's resize() and toTk() calls, which showed
+        # up as the preview intermittently flashing to full size for a frame.
+        self._raw         = None
+        self._raw_seq     = 0
+        self._applied_seq = -1
 
     def _getCameraProperties(self, prefix):
         try:
@@ -235,13 +246,18 @@ class Camera:
                 open_event.set()
                 return
             with self._lock:
-                self.camera   = cap
-                self.image    = frame
-                self.original = frame
+                self.camera    = cap
+                self.original  = frame
+                self.image     = frame
+                self._raw      = frame
+                self._raw_seq += 1
+                self._applied_seq = self._raw_seq
             self._start_ok = True
             self._running  = True
             open_event.set()
-            # Continuous capture loop — runs entirely in background thread
+            # Continuous capture loop — runs entirely in background thread.
+            # Only ever writes original/_raw; self.image is owned by the UI
+            # thread via canny()/resize()/_pull_latest().
             while self._running:
                 ok, frame = cap.read()
                 if not ok:
@@ -249,11 +265,9 @@ class Camera:
                     break
                 frame = self._rotate90(frame)
                 with self._lock:
-                    self.original = frame
-                    if self.frozen is not None:
-                        self.image = cv.addWeighted(frame, 0.7, self.frozen, 0.3, 0.0)
-                    else:
-                        self.image = frame
+                    self.original  = frame
+                    self._raw      = frame
+                    self._raw_seq += 1
 
         self._thread = threading.Thread(target=_capture_loop, daemon=True)
         self._thread.start()
@@ -319,7 +333,23 @@ class Camera:
     def rotate90(self, image):
         return self._rotate90(image)
 
+    def _pull_latest(self):
+        """Snapshot the newest captured frame into self.image, exactly once
+        per new frame. Safe to call from both canny() and resize() each UI
+        tick -- whichever runs first does the pull; the other sees the same
+        _raw_seq already applied and leaves self.image (now possibly already
+        transformed by the other call) alone."""
+        with self._lock:
+            if self._raw is None or self._raw_seq == self._applied_seq:
+                return
+            if self.frozen is not None:
+                self.image = cv.addWeighted(self._raw, 0.7, self.frozen, 0.3, 0.0)
+            else:
+                self.image = self._raw.copy()
+            self._applied_seq = self._raw_seq
+
     def resize(self, factor, maxwidth, maxheight):
+        self._pull_latest()
         if factor == 1.0:
             return
         with self._lock:
@@ -340,6 +370,7 @@ class Camera:
                 pass
 
     def canny(self, threshold1, threshold2):
+        self._pull_latest()
         with self._lock:
             if self.image is None:
                 return
