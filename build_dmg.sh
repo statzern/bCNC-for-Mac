@@ -511,6 +511,78 @@ else
     warn "Could not find the quit protocol binding to patch (bCNC internals may have changed) -- Cmd-Q may still skip saving settings"
 fi
 
+# ── 7e. Turn the camera index field into a dropdown of detected cameras ─────
+# Tools > Camera's "Align Camera" field is a plain free-text integer -- on a
+# laptop with a built-in webcam plus a USB CNC camera, there's no way to know
+# which index is which without guessing. ToolsPage.py already supports a
+# dropdown for any "type" string containing a comma (that's how the
+# 0/90/180/270 angle field works) -- probe which camera indices actually open
+# each time this page is constructed (once per app launch) and use that as
+# the type string instead of "int", restricted to cameras that really exist.
+# Best-effort labels each with its real device name via
+# `system_profiler` on macOS; falls back to plain indices if that fails, and
+# falls back to the original free-text field entirely if no camera opens.
+info "Turning camera index into a dropdown of detected cameras..."
+TOOLSPAGE_PATH="${BCNC_PATH}/ToolsPage.py"
+if grep -q '("aligncam", "int", 0, _("Align Camera")),' "$TOOLSPAGE_PATH"; then
+    "$PY" - "$TOOLSPAGE_PATH" << 'PATCHEOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+old = '''class Camera(_Base):
+    def __init__(self, master):
+        _Base.__init__(self, master, "Camera")
+        self.variables = [
+            ("aligncam", "int", 0, _("Align Camera")),'''
+new = '''class Camera(_Base):
+    def __init__(self, master):
+        _Base.__init__(self, master, "Camera")
+        aligncam_type = "int"
+        aligncam_label = _("Align Camera")
+        try:
+            import cv2 as _cv2_probe
+            _names = []
+            try:
+                import subprocess, json
+                _out = subprocess.run(
+                    ["system_profiler", "SPCameraDataType", "-json"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                _data = json.loads(_out.stdout)
+                _names = [c.get("_name", "") for c in _data.get("SPCameraDataType", [])]
+            except Exception:
+                _names = []
+            _found = []
+            _labels = []
+            for _i in range(5):
+                _cap = _cv2_probe.VideoCapture(_i)
+                if _cap.isOpened():
+                    _found.append(str(_i))
+                    _name = _names[_i] if _i < len(_names) else ""
+                    _labels.append(f"{_i}:{_name}" if _name else str(_i))
+                _cap.release()
+            if _found:
+                aligncam_type = ",".join(_found)
+                aligncam_label = _("Align Camera") + " [" + ", ".join(_labels) + "]"
+        except Exception:
+            pass
+        self.variables = [
+            ("aligncam", aligncam_type, 0, aligncam_label),'''
+if old not in src:
+    raise SystemExit(1)
+with open(path, "w") as f:
+    f.write(src.replace(old, new))
+PATCHEOF
+    if [[ $? -eq 0 ]]; then
+        success "Camera index is now a dropdown of detected cameras"
+    else
+        warn "Camera dropdown patch script failed -- leaving free-text camera index field"
+    fi
+else
+    warn "Could not find the camera index field to patch (bCNC internals may have changed) -- leaving free-text camera index field"
+fi
+
 # ── 8. Generate icon ──────────────────────────────────────────────────────────
 info "Generating icon..."
 mkdir -p "${BUILD_DIR}"
