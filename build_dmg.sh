@@ -213,10 +213,19 @@ class Camera:
             }
         except AttributeError:
             return {}
+        # If the user hasn't configured a resolution in bCNC.ini, AVFoundation
+        # falls back to its own low default capture preset (often well below
+        # what the camera can actually do) since cap.set() is otherwise never
+        # called for width/height at all. Default to 1280x720 instead of
+        # leaving it fully unspecified; an explicit *_width/*_height in the
+        # ini still overrides this.
+        DEFAULTS = {"width": 1280, "height": 720}
         UNSPECIFIED = object()
         result = {}
         for key, (fn, prop) in POSSIBLE_PROPERTIES.items():
             val = fn("Camera", "_".join([prefix, key]), default=UNSPECIFIED)
+            if val is UNSPECIFIED:
+                val = DEFAULTS.get(key, UNSPECIFIED)
             if val is not UNSPECIFIED:
                 result[prop] = val
         return result
