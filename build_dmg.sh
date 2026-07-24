@@ -806,6 +806,21 @@ create-dmg \
 
 success "DMG created: ${DMG_OUT}  ($(du -sh "$DMG_OUT" | cut -f1))"
 
+# ── 16. Install straight to /Applications ────────────────────────────────────
+# Never force-quit a running bCNC -- it may be mid-job controlling real
+# hardware. Only auto-install when it isn't currently running; otherwise
+# leave the DMG for a manual drag-install and say why.
+INSTALLED=0
+info "Installing to /Applications..."
+if pgrep -f "${APP_NAME}.app/Contents/MacOS/${APP_NAME}" >/dev/null 2>&1; then
+    warn "bCNC is currently running -- quit it first, then re-run this script (or drag from the DMG) to install the new build."
+else
+    rm -rf "/Applications/${APP_NAME}.app"
+    cp -R "${APP_BUNDLE}" "/Applications/"
+    success "Installed to /Applications/${APP_NAME}.app"
+    INSTALLED=1
+fi
+
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════╗"
 echo    "║   Build complete!                                ║"
@@ -813,8 +828,14 @@ echo -e "╚══════════════════════�
 echo ""
 echo "  Output: ${DMG_OUT}"
 echo ""
-echo -e "${YELLOW}First launch:${NC}"
-echo "  1. Open the DMG and drag bCNC.app → Applications"
-echo "  2. Right-click bCNC.app → Open  (bypasses Gatekeeper, once only)"
-echo "  3. Allow camera access when prompted"
+if [[ "$INSTALLED" -eq 1 ]]; then
+    echo -e "${YELLOW}Installed to /Applications/bCNC.app.${NC}"
+    echo "  First launch: right-click bCNC.app → Open  (bypasses Gatekeeper, once only)"
+    echo "  Allow camera access when prompted."
+else
+    echo -e "${YELLOW}First launch:${NC}"
+    echo "  1. Open the DMG and drag bCNC.app → Applications"
+    echo "  2. Right-click bCNC.app → Open  (bypasses Gatekeeper, once only)"
+    echo "  3. Allow camera access when prompted"
+fi
 echo ""
