@@ -509,7 +509,12 @@ HOOKEOF
 cat > "${SCRIPT_DIR}/hooks/hook-cv2.py" << 'HOOKEOF'
 from PyInstaller.utils.hooks import collect_dynamic_libs, collect_data_files
 binaries = collect_dynamic_libs('cv2')
-datas    = collect_data_files('cv2')
+# cv2/__init__.py's loader opens config.py / config-<major>.<minor>.py directly
+# off disk (not via import) to bootstrap itself, so those .py files must be
+# copied as literal data -- collect_data_files() excludes .py files by
+# default, which otherwise makes cv2 fail with "OpenCV loader: missing
+# configuration file" before the extension module ever loads.
+datas = collect_data_files('cv2', include_py_files=True)
 HOOKEOF
 success "Hooks written"
 
