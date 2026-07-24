@@ -482,6 +482,35 @@ else
     warn "Could not find the camera ini defaults to patch (bCNC internals may have changed) -- leaving built-in defaults"
 fi
 
+# ── 7d. Save settings on Cmd-Q / menu Quit, not just the window close button ─
+# bmain.py only binds self.protocol("WM_DELETE_WINDOW", self.quit), which
+# fires when clicking the window's close button. macOS's native Quit (Cmd-Q,
+# the app menu's "Quit bCNC", or Dock > Quit) is a *different* event -- Tk's
+# own tk::mac::Quit procedure, which by default just exits immediately -- so
+# none of those ever ran quit() (and therefore never called saveConfig(),
+# which is what writes ~/.bCNC). Register the same quit() as the tk::mac::Quit
+# handler so every way of closing the app saves settings the same way.
+info "Wiring up Cmd-Q / menu Quit to save settings..."
+BMAIN_PATH="${BCNC_PATH}/bmain.py"
+if grep -q 'self.protocol("WM_DELETE_WINDOW", self.quit)' "$BMAIN_PATH"; then
+    "$PY" - "$BMAIN_PATH" << 'PATCHEOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+patched = src.replace(
+    'self.protocol("WM_DELETE_WINDOW", self.quit)',
+    'self.protocol("WM_DELETE_WINDOW", self.quit)\n'
+    '        self.createcommand("tk::mac::Quit", self.quit)',
+)
+with open(path, "w") as f:
+    f.write(patched)
+PATCHEOF
+    success "Cmd-Q / menu Quit now saves settings"
+else
+    warn "Could not find the quit protocol binding to patch (bCNC internals may have changed) -- Cmd-Q may still skip saving settings"
+fi
+
 # ── 8. Generate icon ──────────────────────────────────────────────────────────
 info "Generating icon..."
 mkdir -p "${BUILD_DIR}"
