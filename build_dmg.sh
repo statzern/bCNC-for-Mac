@@ -411,6 +411,13 @@ class Camera:
             return w // 2 - r - max_loc[0], h // 2 - r - max_loc[1]
 
     def toTk(self):
+        # Fallback pull: CNCCanvas only calls resize()/canny() under certain
+        # anchor/zoom/edge conditions (e.g. never for a centered, unzoomed
+        # camera), but toTk() runs every tick unconditionally. Without this,
+        # self.image would stop updating entirely -- frozen on the very first
+        # captured frame -- whenever neither of those ran. Idempotent within
+        # a tick since _pull_latest() no-ops once _raw_seq is already applied.
+        self._pull_latest()
         with self._lock:
             if self.image is None:
                 return None
