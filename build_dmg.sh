@@ -591,11 +591,20 @@ APP_BUNDLE="${DIST_DIR}/bCNC.app"
 success "bCNC.app built"
 
 # ── 14. Ad-hoc code sign ──────────────────────────────────────────────────────
+# On arm64, macOS refuses to exec a binary without a valid signature at all —
+# an app that fails to sign here will "flash and vanish" with no error dialog
+# and no crash log, since it's killed by the kernel before main() ever runs.
+# So a signing failure is fatal, not a warning to skip past.
 info "Code signing (ad-hoc)..."
 codesign --deep --force --sign - \
     --entitlements "${SCRIPT_DIR}/entitlements.plist" \
     --options runtime \
-    "${APP_BUNDLE}" && success "Signed" || warn "codesign failed — camera may need manual Privacy approval"
+    "${APP_BUNDLE}" || die "codesign failed — the app will not launch without a valid signature (especially on arm64)."
+
+info "Verifying code signature..."
+codesign --verify --deep --strict "${APP_BUNDLE}" \
+    || die "codesign verification failed after signing — the app will not launch."
+success "Signed and verified"
 
 # ── 15. Build DMG ─────────────────────────────────────────────────────────────
 info "Building DMG..."
