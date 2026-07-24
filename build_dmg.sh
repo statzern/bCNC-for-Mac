@@ -421,6 +421,30 @@ class Camera:
 CAMERAEOF
 success "Camera.py patched"
 
+# ── 7b. Bump camera UI refresh rate from 10fps to ~30fps ─────────────────────
+# CNCCanvas.py hardcodes a 100ms self.after() for the camera preview refresh,
+# independent of how fast the capture thread actually delivers frames. Raise
+# it to 33ms (~30fps) to reduce the visible sluggishness of the preview.
+info "Raising camera refresh rate to ~30fps..."
+CNCCANVAS_PATH="${BCNC_PATH}/CNCCanvas.py"
+if grep -q 'self.after(100, self.cameraRefresh)' "$CNCCANVAS_PATH"; then
+    "$PY" - "$CNCCANVAS_PATH" << 'PATCHEOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+patched = src.replace(
+    "self.after(100, self.cameraRefresh)",
+    "self.after(33, self.cameraRefresh)",
+)
+with open(path, "w") as f:
+    f.write(patched)
+PATCHEOF
+    success "Camera refresh rate raised to ~30fps"
+else
+    warn "Could not find the camera refresh interval to patch (bCNC internals may have changed) -- leaving default 10fps"
+fi
+
 # ── 8. Generate icon ──────────────────────────────────────────────────────────
 info "Generating icon..."
 mkdir -p "${BUILD_DIR}"
