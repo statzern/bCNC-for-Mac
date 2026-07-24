@@ -7,13 +7,14 @@ Packages **[bCNC](https://github.com/vlachoudis/bCNC)** (CNC G-code sender) into
 | Component | Version | Purpose |
 |-----------|---------|---------|
 | bCNC | 0.9.16 | CNC G-code sender / controller |
-| opencv-python-headless | 4.8.1.78 | Camera capture via AVFoundation |
-| numpy | 1.26.4 | Numerical operations (pinned for OpenCV ABI) |
-| Pillow | ≥9.0 | Image processing |
+| opencv-python-headless | 5.0.0.93 | Camera capture via AVFoundation |
+| numpy | 2.4.6 | Numerical operations (opencv-python 5.x requires numpy ≥2) |
+| Pillow | ≥11.0 | Image processing |
 | pyserial | ≥3.5 | USB/serial comms with CNC machine |
-| svgelements | 1.x | SVG import |
-| shxparser | 0.0.2 | SHX font support |
-| tkinter-gl | ≥1.0 | OpenGL canvas |
+| svgelements | ≥1.9,<2.0 | SVG import |
+| shxparser | ≥0.0.2 | SHX font support |
+| tkinter-gl | ≥1.1 | OpenGL canvas |
+| pyinstaller | 6.21.0 | App bundling |
 
 ## Prerequisites
 
@@ -26,9 +27,11 @@ xcode-select --install
 # Homebrew (if not installed)
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-# Python 3.11 with tkinter + packaging tool
-brew install python@3.11 python-tk@3.11 create-dmg
+# Python 3.13 with tkinter + packaging tool
+brew install python@3.13 python-tk@3.13 create-dmg
 ```
+
+> **Minimum macOS version:** opencv-python-headless 5.x ships wheels for macOS 14 (Sonoma) or newer on Intel Macs, and macOS 13 (Ventura) or newer on Apple Silicon. The built `.app` sets `LSMinimumSystemVersion` to match whichever architecture it was built on.
 
 ## Build
 

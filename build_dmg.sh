@@ -4,7 +4,7 @@
 #
 # Prerequisites (install once):
 #   xcode-select --install
-#   brew install python@3.11 python-tk@3.11 create-dmg
+#   brew install python@3.13 python-tk@3.13 create-dmg
 #
 # Usage:
 #   chmod +x build_dmg.sh && ./build_dmg.sh
@@ -35,23 +35,31 @@ echo -e "${NC}"
 
 # ── 1. Platform ───────────────────────────────────────────────────────────────
 [[ "$(uname)" == "Darwin" ]] || die "This script must be run on macOS."
-info "Architecture: $(uname -m)"
+ARCH="$(uname -m)"
+info "Architecture: ${ARCH}"
+
+# opencv-python-headless 5.x ships macOS 14.0+ wheels for x86_64, 13.0+ for arm64
+if [[ "$ARCH" == "arm64" ]]; then
+    MACOS_MIN="13.0"
+else
+    MACOS_MIN="14.0"
+fi
 
 # ── 2. Python ─────────────────────────────────────────────────────────────────
-info "Locating Python 3.10–3.12..."
+info "Locating Python 3.11–3.14..."
 PYTHON=""
-for candidate in python3.11 python3.10 python3.12 python3; do
+for candidate in python3.13 python3.12 python3.14 python3.11 python3; do
     if command -v "$candidate" &>/dev/null; then
         ver=$("$candidate" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
         major="${ver%%.*}"; minor="${ver##*.}"
-        if [[ "$major" -eq 3 && "$minor" -ge 10 && "$minor" -le 12 ]]; then
+        if [[ "$major" -eq 3 && "$minor" -ge 11 && "$minor" -le 14 ]]; then
             PYTHON=$(command -v "$candidate")
             info "Using Python: $PYTHON ($ver)"
             break
         fi
     fi
 done
-[[ -n "$PYTHON" ]] || die "Python 3.10–3.12 not found.\n  Install: brew install python@3.11"
+[[ -n "$PYTHON" ]] || die "Python 3.11–3.14 not found.\n  Install: brew install python@3.13"
 
 info "Checking tkinter..."
 "$PYTHON" -c "import tkinter" 2>/dev/null \
@@ -76,22 +84,22 @@ PY="${VENV_DIR}/bin/python"
 # ── 5. Install dependencies ───────────────────────────────────────────────────
 info "Installing Python packages..."
 
-# Pin numpy to 1.x — opencv 4.x ABI requires it
-"$PIP" install "numpy==1.26.4" -q
+# opencv-python-headless 5.x requires numpy>=2
+"$PIP" install "numpy==2.4.6" -q
 
 # OpenCV headless — ships VideoCapture (AVFoundation on macOS), no Qt conflicts
-"$PIP" install "opencv-python-headless==4.8.1.78" -q
+"$PIP" install "opencv-python-headless==5.0.0.93" -q
 
 "$PIP" install \
-    "Pillow>=9.0" \
+    "Pillow>=11.0" \
     "pyserial>=3.5" \
-    "svgelements>=1.0,<2.0" \
+    "svgelements>=1.9,<2.0" \
     "shxparser>=0.0.2" \
-    "tkinter-gl>=1.0" \
+    "tkinter-gl>=1.1" \
     -q
 
 "$PIP" install bcnc -q
-"$PIP" install pyinstaller -q
+"$PIP" install "pyinstaller==6.21.0" -q
 
 success "All packages installed"
 
@@ -530,7 +538,7 @@ app = BUNDLE(
         'CFBundlePackageType': 'APPL',
         'NSHighResolutionCapable': True,
         'NSCameraUsageDescription': 'bCNC uses the camera for workpiece alignment via the Camera module.',
-        'LSMinimumSystemVersion': '11.0',
+        'LSMinimumSystemVersion': '${MACOS_MIN}',
         'NSPrincipalClass': 'NSApplication',
         'NSDocumentTypes': [{
             'CFBundleTypeName': 'GCode File',
