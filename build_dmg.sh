@@ -127,7 +127,7 @@ info "Installing Python packages..."
     -q
 
 "$PIP" install bcnc -q
-"$PIP" install "pyinstaller==6.21.0" -q
+"$PIP" install "pyinstaller==6.21.0" "pyinstaller-hooks-contrib==2026.6" -q
 
 success "All packages installed"
 
@@ -419,10 +419,12 @@ for sub in ('', 'lib', 'plugins', 'controllers'):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-# Add cv2 — PyInstaller places it in Resources/cv2
-cv2_path = os.path.join(resources, 'cv2')
-if os.path.isdir(cv2_path) and cv2_path not in sys.path:
-    sys.path.insert(0, cv2_path)
+# cv2 is intentionally NOT added to sys.path manually here: the
+# pyinstaller-hooks-contrib hook collects it in source form
+# (module_collection_mode='py') precisely so it resolves through the normal
+# import machinery. Manually inserting its directory caused a duplicate,
+# self-referential sys.path entry that triggered cv2's own recursion guard
+# ("recursion is detected during loading of cv2 binary extensions").
 
 # Install no-op _() before any bCNC module loads — bFileDialog uses it at
 # class-definition time before Utils.initTranslator() has run
@@ -506,16 +508,15 @@ datas = collect_data_files('bCNC', includes=['**/*'])
 hiddenimports = collect_submodules('bCNC')
 HOOKEOF
 
-cat > "${SCRIPT_DIR}/hooks/hook-cv2.py" << 'HOOKEOF'
-from PyInstaller.utils.hooks import collect_dynamic_libs, collect_data_files
-binaries = collect_dynamic_libs('cv2')
-# cv2/__init__.py's loader opens config.py / config-<major>.<minor>.py directly
-# off disk (not via import) to bootstrap itself, so those .py files must be
-# copied as literal data -- collect_data_files() excludes .py files by
-# default, which otherwise makes cv2 fail with "OpenCV loader: missing
-# configuration file" before the extension module ever loads.
-datas = collect_data_files('cv2', include_py_files=True)
-HOOKEOF
+# No custom hook-cv2.py here: cv2's own loader does sys.path module-substitution
+# tricks in cv2/__init__.py that are incompatible with PyInstaller's default
+# frozen-import mechanism ("recursion detected during loading of cv2 binary
+# extensions"). pyinstaller-hooks-contrib ships a hook that sets
+# module_collection_mode='py' (collecting cv2 as loose files instead of baking
+# it into the frozen archive) plus correctly locates the native extension --
+# PyInstaller auto-discovers it via that package's entry points, and a
+# same-named file in our own hookspath would shadow it, so we deliberately
+# don't write one.
 success "Hooks written"
 
 # ── 12. Write PyInstaller spec ────────────────────────────────────────────────
