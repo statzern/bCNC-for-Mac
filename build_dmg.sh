@@ -61,9 +61,16 @@ for candidate in python3.13 python3.12 python3.14 python3.11 python3; do
 done
 [[ -n "$PYTHON" ]] || die "Python 3.11–3.14 not found.\n  Install: brew install python@3.13"
 
+info "Checking Python architecture matches host (${ARCH})..."
+PY_ARCH=$("$PYTHON" -c "import platform; print(platform.machine())")
+if [[ "$PY_ARCH" != "$ARCH" ]]; then
+    die "Python at ${PYTHON} is ${PY_ARCH}, but this Mac is ${ARCH}.\n  Building with a ${PY_ARCH} Python produces a ${PY_ARCH} app that runs under\n  Rosetta translation on ${ARCH} — Tk 9.0's macOS menu code aborts when run\n  translated, crashing bCNC on launch.\n  Fix: install a native ${ARCH} Python, e.g. via Homebrew at $( [[ "$ARCH" == "arm64" ]] && echo /opt/homebrew || echo /usr/local ):\n    brew install python@3.13 python-tk@3.13\n  and make sure that Homebrew's bin directory comes first in \$PATH\n  (check with: which -a python3.13)."
+fi
+success "Python architecture OK (${PY_ARCH})"
+
 info "Checking tkinter..."
 "$PYTHON" -c "import tkinter" 2>/dev/null \
-    || die "tkinter missing.\n  Fix: brew install python-tk@3.11"
+    || die "tkinter missing.\n  Fix: brew install python-tk@3.13"
 success "tkinter OK"
 
 # ── 3. Homebrew tools ─────────────────────────────────────────────────────────
