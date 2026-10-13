@@ -393,6 +393,41 @@ Utils.iniSystem = os.path.join(bcnc_base, 'bCNC.ini')
 # Prefer AVFoundation for camera on macOS
 os.environ.setdefault('OPENCV_VIDEOIO_PRIORITY_AVFOUNDATION', '1')
 
+# Disable macOS App Nap. bCNC drives its UI from Tk after() timers; when macOS
+# throttles/coalesces them the GUI freezes until another window is activated.
+def _disable_app_nap():
+    if sys.platform != 'darwin':
+        return
+    try:
+        import ctypes, ctypes.util
+        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library('objc'))
+        ctypes.cdll.LoadLibrary(ctypes.util.find_library('Foundation'))
+        vp = ctypes.c_void_p
+        objc.objc_getClass.restype = vp
+        objc.objc_getClass.argtypes = [ctypes.c_char_p]
+        objc.sel_registerName.restype = vp
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+        send = objc.objc_msgSend
+        send.restype = vp
+
+        def msg(obj, sel, *args):
+            send.argtypes = [vp, vp] + [type(a) if isinstance(a, (vp, ctypes.c_uint64, ctypes.c_char_p)) else vp for a in args]
+            return send(obj, objc.sel_registerName(sel), *args)
+
+        info = msg(objc.objc_getClass(b'NSProcessInfo'), b'processInfo')
+        reason = msg(objc.objc_getClass(b'NSString'), b'stringWithUTF8String:',
+                     ctypes.c_char_p(b'bCNC realtime GUI/serial polling'))
+        # NSActivityUserInitiatedAllowingIdleSystemSleep
+        opts = ctypes.c_uint64(0x00FFFFFF & ~0x00100000)
+        token = msg(info, b'beginActivityWithOptions:reason:', opts, reason)
+        msg(token, b'retain')           # keep the activity alive for the process lifetime
+        global _app_nap_token
+        _app_nap_token = token
+    except Exception:
+        pass
+
+_disable_app_nap()
+
 from bCNC.__main__ import main
 sys.exit(main())
 PYEOF
@@ -532,6 +567,7 @@ app = BUNDLE(
         'NSCameraUsageDescription': 'bCNC uses the camera for workpiece alignment via the Camera module.',
         'LSMinimumSystemVersion': '11.0',
         'NSPrincipalClass': 'NSApplication',
+        'NSAppSleepDisabled': True,   # disable App Nap (GUI freezes until refocus)
         'NSDocumentTypes': [{
             'CFBundleTypeName': 'GCode File',
             'CFBundleTypeRole': 'Editor',
