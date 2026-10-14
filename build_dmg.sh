@@ -351,9 +351,12 @@ class Camera:
         with self._lock:
             if self._raw is None or self._raw_seq == self._applied_seq:
                 return
-            if self.frozen is not None:
+            if (self.frozen is not None
+                    and self.frozen.shape == self._raw.shape):
                 self.image = cv.addWeighted(self._raw, 0.7, self.frozen, 0.3, 0.0)
             else:
+                # No freeze overlay, or frame size/rotation changed since it
+                # was taken (addWeighted would raise on mismatched sizes).
                 self.image = self._raw.copy()
             self._applied_seq = self._raw_seq
 
@@ -389,7 +392,11 @@ class Camera:
 
     def freeze(self, f):
         with self._lock:
-            self.frozen = self.image.copy() if f and self.image is not None else None
+            # Snapshot the full-size raw frame, not self.image: self.image may
+            # already have been cropped/resized by resize()/canny() this tick,
+            # which made later addWeighted(raw, frozen) fail on size mismatch.
+            src = self._raw if self._raw is not None else self.image
+            self.frozen = src.copy() if f and src is not None else None
 
     def getCenterTemplate(self, r):
         with self._lock:
