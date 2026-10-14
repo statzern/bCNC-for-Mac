@@ -632,6 +632,48 @@ else
     warn "Could not find zoomCanvas's after_idle to patch (bCNC internals may have changed) -- Cmd-+/- and magnifier zoom may not work"
 fi
 
+# ── 7g. Make the grid visible ────────────────────────────────────────────────
+# CNCCanvas.drawGrid() only spans the bounding box of the loaded G-code, which
+# is an empty range when nothing is loaded (so no grid at all), and it uses a
+# very fine dash=(1, 3) that is barely/not visible on macOS Tk. Fall back to
+# the machine work area when there is no G-code, and use the same dash
+# pattern as the (visible) margin/work-area outlines.
+info "Making the canvas grid visible..."
+if grep -q 'def drawGrid(self):' "$CNCCANVAS_PATH"; then
+    "$PY" - "$CNCCANVAS_PATH" << 'PATCHEOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+start = src.index('    def drawGrid(self):\n        self.delete("Grid")')
+end = src.index("    # ---", start)
+body = src[start:end]
+anchor = "        if not self.draw_grid:\n            return\n"
+assert anchor in body
+fallback = anchor + (
+    '        _gx0, _gx1 = CNC.vars["axmin"], CNC.vars["axmax"]\n'
+    '        _gy0, _gy1 = CNC.vars["aymin"], CNC.vars["aymax"]\n'
+    '        if _gx0 > _gx1 or _gy0 > _gy1:\n'
+    '            # No G-code loaded: grid the machine work area instead\n'
+    '            _gx0, _gx1 = self._dx - CNC.travel_x, self._dx\n'
+    '            _gy0, _gy1 = self._dy - CNC.travel_y, self._dy\n'
+)
+body = body.replace(anchor, fallback)
+for old, new in (('CNC.vars["axmin"] //', '_gx0 //'),
+                 ('CNC.vars["axmax"] //', '_gx1 //'),
+                 ('CNC.vars["aymin"] //', '_gy0 //'),
+                 ('CNC.vars["aymax"] //', '_gy1 //')):
+    body = body.replace(old, new)
+body = body.replace("dash=(1, 3)", "dash=(3, 3)")
+src = src[:start] + body + src[end:]
+with open(path, "w") as f:
+    f.write(src)
+PATCHEOF
+    success "Grid patched"
+else
+    warn "Could not find drawGrid to patch (bCNC internals may have changed) -- grid unchanged"
+fi
+
 # ── 8. Generate icon ──────────────────────────────────────────────────────────
 info "Generating icon..."
 mkdir -p "${BUILD_DIR}"
