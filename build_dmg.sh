@@ -4,7 +4,7 @@
 #
 # Prerequisites (install once):
 #   xcode-select --install
-#   brew install python@3.11 python-tk@3.11 create-dmg
+#   brew install python@3.13 python-tk@3.13 create-dmg
 #
 # Usage:
 #   chmod +x build_dmg.sh && ./build_dmg.sh
@@ -35,27 +35,63 @@ echo -e "${NC}"
 
 # ── 1. Platform ───────────────────────────────────────────────────────────────
 [[ "$(uname)" == "Darwin" ]] || die "This script must be run on macOS."
-info "Architecture: $(uname -m)"
+ARCH="$(uname -m)"
+info "Architecture: ${ARCH}"
+
+# opencv-python-headless 5.x ships macOS 14.0+ wheels for x86_64, 13.0+ for arm64
+if [[ "$ARCH" == "arm64" ]]; then
+    MACOS_MIN="13.0"
+else
+    MACOS_MIN="14.0"
+fi
 
 # ── 2. Python ─────────────────────────────────────────────────────────────────
-info "Locating Python 3.10–3.12..."
+# A differently-arched Python earlier in $PATH (e.g. an Intel Homebrew still
+# lingering on an Apple Silicon Mac) would otherwise get picked, producing a
+# Rosetta-translated app — Tk 9.0's macOS menu code aborts when translated.
+# So every candidate is checked for a native-arch match, not just the first
+# one found; the native Homebrew prefix is searched first, then the rest of
+# $PATH, and any wrong-arch hits are skipped rather than accepted.
+if [[ "$ARCH" == "arm64" ]]; then
+    NATIVE_PREFIX="/opt/homebrew"
+else
+    NATIVE_PREFIX="/usr/local"
+fi
+
+info "Locating a native ${ARCH} Python 3.11–3.14..."
+IFS=':' read -ra PATH_DIRS <<< "$PATH"
+SEARCH_DIRS=("${NATIVE_PREFIX}/bin" "${PATH_DIRS[@]}")
+
 PYTHON=""
-for candidate in python3.11 python3.10 python3.12 python3; do
-    if command -v "$candidate" &>/dev/null; then
-        ver=$("$candidate" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+FOUND_WRONG_ARCH=""
+for candidate in python3.13 python3.12 python3.14 python3.11; do
+    for dir in "${SEARCH_DIRS[@]}"; do
+        bin="${dir}/${candidate}"
+        [[ -x "$bin" ]] || continue
+        ver=$("$bin" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null) || continue
         major="${ver%%.*}"; minor="${ver##*.}"
-        if [[ "$major" -eq 3 && "$minor" -ge 10 && "$minor" -le 12 ]]; then
-            PYTHON=$(command -v "$candidate")
-            info "Using Python: $PYTHON ($ver)"
-            break
+        [[ "$major" -eq 3 && "$minor" -ge 11 && "$minor" -le 14 ]] || continue
+        py_arch=$("$bin" -c "import platform; print(platform.machine())" 2>/dev/null)
+        if [[ "$py_arch" == "$ARCH" ]]; then
+            PYTHON="$bin"
+            info "Using native Python: $PYTHON ($ver, ${py_arch})"
+            break 2
+        else
+            FOUND_WRONG_ARCH="${bin} (${py_arch})"
         fi
-    fi
+    done
 done
-[[ -n "$PYTHON" ]] || die "Python 3.10–3.12 not found.\n  Install: brew install python@3.11"
+
+if [[ -z "$PYTHON" ]]; then
+    extra=""
+    [[ -n "$FOUND_WRONG_ARCH" ]] && extra="\n  Found ${FOUND_WRONG_ARCH} but it doesn't match this Mac's arch (${ARCH})."
+    die "No native ${ARCH} Python 3.11–3.14 found.${extra}\n  Install: brew install python@3.13 python-tk@3.13\n  (native ${ARCH} Homebrew lives at ${NATIVE_PREFIX})"
+fi
+success "Python architecture OK (native ${ARCH})"
 
 info "Checking tkinter..."
 "$PYTHON" -c "import tkinter" 2>/dev/null \
-    || die "tkinter missing.\n  Fix: brew install python-tk@3.11"
+    || die "tkinter missing.\n  Fix: brew install python-tk@3.13"
 success "tkinter OK"
 
 # ── 3. Homebrew tools ─────────────────────────────────────────────────────────
@@ -76,22 +112,22 @@ PY="${VENV_DIR}/bin/python"
 # ── 5. Install dependencies ───────────────────────────────────────────────────
 info "Installing Python packages..."
 
-# Pin numpy to 1.x — opencv 4.x ABI requires it
-"$PIP" install "numpy==1.26.4" -q
+# opencv-python-headless 5.x requires numpy>=2
+"$PIP" install "numpy==2.4.6" -q
 
 # OpenCV headless — ships VideoCapture (AVFoundation on macOS), no Qt conflicts
-"$PIP" install "opencv-python-headless==4.8.1.78" -q
+"$PIP" install "opencv-python-headless==5.0.0.93" -q
 
 "$PIP" install \
-    "Pillow>=9.0" \
+    "Pillow>=11.0" \
     "pyserial>=3.5" \
-    "svgelements>=1.0,<2.0" \
+    "svgelements>=1.9,<2.0" \
     "shxparser>=0.0.2" \
-    "tkinter-gl>=1.0" \
+    "tkinter-gl>=1.1" \
     -q
 
 "$PIP" install bcnc -q
-"$PIP" install pyinstaller -q
+"$PIP" install "pyinstaller==6.21.0" "pyinstaller-hooks-contrib==2026.6" -q
 
 success "All packages installed"
 
@@ -107,18 +143,26 @@ import Utils
 
 try:
     import cv2 as cv
-except ImportError:
+except Exception:
+    import traceback
+    print("Unable to import cv2 (OpenCV) - camera will be disabled:")
+    traceback.print_exc()
     cv = None
 
 try:
     import numpy as np
-except ImportError:
+except Exception:
+    import traceback
+    print("Unable to import numpy - camera will be disabled:")
+    traceback.print_exc()
     np = None
 
 try:
     from PIL import Image, ImageTk
-except ImportError:
-    print("Unable to import Image, ImageTk from Pillow")
+except Exception:
+    import traceback
+    print("Unable to import Image, ImageTk from Pillow - camera will be disabled:")
+    traceback.print_exc()
     cv = None
 
 
@@ -141,6 +185,17 @@ class Camera:
         self._lock    = threading.Lock()
         self._thread  = None
         self._running = False
+        # The capture thread only ever writes _raw/_raw_seq; canny()/resize()
+        # are the sole consumers that turn the latest raw frame into
+        # self.image, exactly once per new frame (see _pull_latest). This
+        # keeps self.image stable for the whole UI tick -- previously the
+        # capture thread wrote self.image directly and could overwrite an
+        # already-resized frame with a fresh full-resolution one in the
+        # window between CNCCanvas's resize() and toTk() calls, which showed
+        # up as the preview intermittently flashing to full size for a frame.
+        self._raw         = None
+        self._raw_seq     = 0
+        self._applied_seq = -1
 
     def _getCameraProperties(self, prefix):
         try:
@@ -158,10 +213,19 @@ class Camera:
             }
         except AttributeError:
             return {}
+        # If the user hasn't configured a resolution in bCNC.ini, AVFoundation
+        # falls back to its own low default capture preset (often well below
+        # what the camera can actually do) since cap.set() is otherwise never
+        # called for width/height at all. Default to 1280x720 instead of
+        # leaving it fully unspecified; an explicit *_width/*_height in the
+        # ini still overrides this.
+        DEFAULTS = {"width": 1280, "height": 720}
         UNSPECIFIED = object()
         result = {}
         for key, (fn, prop) in POSSIBLE_PROPERTIES.items():
             val = fn("Camera", "_".join([prefix, key]), default=UNSPECIFIED)
+            if val is UNSPECIFIED:
+                val = DEFAULTS.get(key, UNSPECIFIED)
             if val is not UNSPECIFIED:
                 result[prop] = val
         return result
@@ -191,13 +255,18 @@ class Camera:
                 open_event.set()
                 return
             with self._lock:
-                self.camera   = cap
-                self.image    = frame
-                self.original = frame
+                self.camera    = cap
+                self.original  = frame
+                self.image     = frame
+                self._raw      = frame
+                self._raw_seq += 1
+                self._applied_seq = self._raw_seq
             self._start_ok = True
             self._running  = True
             open_event.set()
-            # Continuous capture loop — runs entirely in background thread
+            # Continuous capture loop — runs entirely in background thread.
+            # Only ever writes original/_raw; self.image is owned by the UI
+            # thread via canny()/resize()/_pull_latest().
             while self._running:
                 ok, frame = cap.read()
                 if not ok:
@@ -205,11 +274,9 @@ class Camera:
                     break
                 frame = self._rotate90(frame)
                 with self._lock:
-                    self.original = frame
-                    if self.frozen is not None:
-                        self.image = cv.addWeighted(frame, 0.7, self.frozen, 0.3, 0.0)
-                    else:
-                        self.image = frame
+                    self.original  = frame
+                    self._raw      = frame
+                    self._raw_seq += 1
 
         self._thread = threading.Thread(target=_capture_loop, daemon=True)
         self._thread.start()
@@ -275,7 +342,23 @@ class Camera:
     def rotate90(self, image):
         return self._rotate90(image)
 
+    def _pull_latest(self):
+        """Snapshot the newest captured frame into self.image, exactly once
+        per new frame. Safe to call from both canny() and resize() each UI
+        tick -- whichever runs first does the pull; the other sees the same
+        _raw_seq already applied and leaves self.image (now possibly already
+        transformed by the other call) alone."""
+        with self._lock:
+            if self._raw is None or self._raw_seq == self._applied_seq:
+                return
+            if self.frozen is not None:
+                self.image = cv.addWeighted(self._raw, 0.7, self.frozen, 0.3, 0.0)
+            else:
+                self.image = self._raw.copy()
+            self._applied_seq = self._raw_seq
+
     def resize(self, factor, maxwidth, maxheight):
+        self._pull_latest()
         if factor == 1.0:
             return
         with self._lock:
@@ -296,6 +379,7 @@ class Camera:
                 pass
 
     def canny(self, threshold1, threshold2):
+        self._pull_latest()
         with self._lock:
             if self.image is None:
                 return
@@ -327,6 +411,13 @@ class Camera:
             return w // 2 - r - max_loc[0], h // 2 - r - max_loc[1]
 
     def toTk(self):
+        # Fallback pull: CNCCanvas only calls resize()/canny() under certain
+        # anchor/zoom/edge conditions (e.g. never for a centered, unzoomed
+        # camera), but toTk() runs every tick unconditionally. Without this,
+        # self.image would stop updating entirely -- frozen on the very first
+        # captured frame -- whenever neither of those ran. Idempotent within
+        # a tick since _pull_latest() no-ops once _raw_seq is already applied.
+        self._pull_latest()
         with self._lock:
             if self.image is None:
                 return None
@@ -336,6 +427,161 @@ class Camera:
             return self.imagetk
 CAMERAEOF
 success "Camera.py patched"
+
+# ── 7b. Bump camera UI refresh rate from 10fps to ~30fps ─────────────────────
+# CNCCanvas.py hardcodes a 100ms self.after() for the camera preview refresh,
+# independent of how fast the capture thread actually delivers frames. Raise
+# it to 33ms (~30fps) to reduce the visible sluggishness of the preview.
+info "Raising camera refresh rate to ~30fps..."
+CNCCANVAS_PATH="${BCNC_PATH}/CNCCanvas.py"
+if grep -q 'self.after(100, self.cameraRefresh)' "$CNCCANVAS_PATH"; then
+    "$PY" - "$CNCCANVAS_PATH" << 'PATCHEOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+patched = src.replace(
+    "self.after(100, self.cameraRefresh)",
+    "self.after(33, self.cameraRefresh)",
+)
+with open(path, "w") as f:
+    f.write(patched)
+PATCHEOF
+    success "Camera refresh rate raised to ~30fps"
+else
+    warn "Could not find the camera refresh interval to patch (bCNC internals may have changed) -- leaving default 10fps"
+fi
+
+# ── 7c. Set default camera rotation/scale ────────────────────────────────────
+# aligncam_scale ships as 10.0 (pixels/unit) and aligncam_rotation isn't
+# present at all in bCNC.ini's [Camera] section (so it already falls back to
+# 0 via Utils.getFloat's own default) -- set both explicitly to the requested
+# defaults. This only affects the bundled defaults (Utils.iniSystem); a
+# per-user ~/.bCNC from an earlier run still overrides these for anyone who
+# already saved different values via the Probe > Camera page.
+info "Setting default camera rotation=0, scale=0.8..."
+BCNC_INI_PATH="${BCNC_PATH}/bCNC.ini"
+if grep -q 'aligncam_scale  = 10.0' "$BCNC_INI_PATH"; then
+    "$PY" - "$BCNC_INI_PATH" << 'PATCHEOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+patched = src.replace(
+    "aligncam_scale  = 10.0",
+    "aligncam_scale  = 0.8",
+).replace(
+    "aligncam_angle  = 0\n",
+    "aligncam_angle  = 0\naligncam_rotation = 0\n",
+)
+with open(path, "w") as f:
+    f.write(patched)
+PATCHEOF
+    success "Camera defaults set (rotation=0, scale=0.8)"
+else
+    warn "Could not find the camera ini defaults to patch (bCNC internals may have changed) -- leaving built-in defaults"
+fi
+
+# ── 7d. Save settings on Cmd-Q / menu Quit, not just the window close button ─
+# bmain.py only binds self.protocol("WM_DELETE_WINDOW", self.quit), which
+# fires when clicking the window's close button. macOS's native Quit (Cmd-Q,
+# the app menu's "Quit bCNC", or Dock > Quit) is a *different* event -- Tk's
+# own tk::mac::Quit procedure, which by default just exits immediately -- so
+# none of those ever ran quit() (and therefore never called saveConfig(),
+# which is what writes ~/.bCNC). Register the same quit() as the tk::mac::Quit
+# handler so every way of closing the app saves settings the same way.
+info "Wiring up Cmd-Q / menu Quit to save settings..."
+BMAIN_PATH="${BCNC_PATH}/bmain.py"
+if grep -q 'self.protocol("WM_DELETE_WINDOW", self.quit)' "$BMAIN_PATH"; then
+    "$PY" - "$BMAIN_PATH" << 'PATCHEOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+patched = src.replace(
+    'self.protocol("WM_DELETE_WINDOW", self.quit)',
+    'self.protocol("WM_DELETE_WINDOW", self.quit)\n'
+    '        self.createcommand("tk::mac::Quit", self.quit)',
+)
+with open(path, "w") as f:
+    f.write(patched)
+PATCHEOF
+    success "Cmd-Q / menu Quit now saves settings"
+else
+    warn "Could not find the quit protocol binding to patch (bCNC internals may have changed) -- Cmd-Q may still skip saving settings"
+fi
+
+# ── 7e. Turn the camera index field into a dropdown of detected cameras ─────
+# Tools > Camera's "Align Camera" field is a plain free-text integer -- on a
+# laptop with a built-in webcam plus a USB CNC camera, there's no way to know
+# which index is which without guessing. ToolsPage.py already supports a
+# dropdown for any "type" string containing a comma (that's how the
+# 0/90/180/270 angle field works) -- probe which camera indices actually open
+# each time this page is constructed (once per app launch) and use that as
+# the type string instead of "int", restricted to cameras that really exist.
+# Best-effort labels each with its real device name via
+# `system_profiler` on macOS; falls back to plain indices if that fails, and
+# falls back to the original free-text field entirely if no camera opens.
+info "Turning camera index into a dropdown of detected cameras..."
+TOOLSPAGE_PATH="${BCNC_PATH}/ToolsPage.py"
+if grep -q '("aligncam", "int", 0, _("Align Camera")),' "$TOOLSPAGE_PATH"; then
+    "$PY" - "$TOOLSPAGE_PATH" << 'PATCHEOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+old = '''class Camera(_Base):
+    def __init__(self, master):
+        _Base.__init__(self, master, "Camera")
+        self.variables = [
+            ("aligncam", "int", 0, _("Align Camera")),'''
+new = '''class Camera(_Base):
+    def __init__(self, master):
+        _Base.__init__(self, master, "Camera")
+        aligncam_type = "int"
+        aligncam_label = _("Align Camera")
+        try:
+            import cv2 as _cv2_probe
+            _names = []
+            try:
+                import subprocess, json
+                _out = subprocess.run(
+                    ["system_profiler", "SPCameraDataType", "-json"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                _data = json.loads(_out.stdout)
+                _names = [c.get("_name", "") for c in _data.get("SPCameraDataType", [])]
+            except Exception:
+                _names = []
+            _found = []
+            _labels = []
+            for _i in range(5):
+                _cap = _cv2_probe.VideoCapture(_i)
+                if _cap.isOpened():
+                    _found.append(str(_i))
+                    _name = _names[_i] if _i < len(_names) else ""
+                    _labels.append(f"{_i}:{_name}" if _name else str(_i))
+                _cap.release()
+            if _found:
+                aligncam_type = ",".join(_found)
+                aligncam_label = _("Align Camera") + " [" + ", ".join(_labels) + "]"
+        except Exception:
+            pass
+        self.variables = [
+            ("aligncam", aligncam_type, 0, aligncam_label),'''
+if old not in src:
+    raise SystemExit(1)
+with open(path, "w") as f:
+    f.write(src.replace(old, new))
+PATCHEOF
+    if [[ $? -eq 0 ]]; then
+        success "Camera index is now a dropdown of detected cameras"
+    else
+        warn "Camera dropdown patch script failed -- leaving free-text camera index field"
+    fi
+else
+    warn "Could not find the camera index field to patch (bCNC internals may have changed) -- leaving free-text camera index field"
+fi
 
 # ── 8. Generate icon ──────────────────────────────────────────────────────────
 info "Generating icon..."
@@ -375,14 +621,45 @@ for sub in ('', 'lib', 'plugins', 'controllers'):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-# Add cv2 — PyInstaller places it in Resources/cv2
-cv2_path = os.path.join(resources, 'cv2')
-if os.path.isdir(cv2_path) and cv2_path not in sys.path:
-    sys.path.insert(0, cv2_path)
+# cv2 is intentionally NOT added to sys.path manually here: the
+# pyinstaller-hooks-contrib hook collects it in source form
+# (module_collection_mode='py') precisely so it resolves through the normal
+# import machinery. Manually inserting its directory caused a duplicate,
+# self-referential sys.path entry that triggered cv2's own recursion guard
+# ("recursion is detected during loading of cv2 binary extensions").
 
 # Install no-op _() before any bCNC module loads — bFileDialog uses it at
 # class-definition time before Utils.initTranslator() has run
 builtins._ = lambda x: x
+
+# Tcl/Tk 9.0 removed the legacy "trace variable/vdelete/vinfo" Tcl commands,
+# keeping only "trace add/remove/info". bCNC's CNCCanvas.py (and possibly
+# other modules) still call the deprecated tkinter Variable.trace()/
+# trace_variable() methods, which issue the old Tcl syntax and now raise
+# TclError: bad option "variable". Redirect them to the modern trace_add()/
+# trace_remove()/trace_info(), which take the same callback signature.
+import tkinter
+
+_TRACE_MODE_TO_NEW = {"r": "read", "w": "write", "u": "unset"}
+_TRACE_MODE_TO_OLD = {v: k for k, v in _TRACE_MODE_TO_NEW.items()}
+
+def _trace_variable_compat(self, mode, callback):
+    return self.trace_add(_TRACE_MODE_TO_NEW.get(mode, mode), callback)
+
+def _trace_compat(self, mode, callback):
+    return _trace_variable_compat(self, mode, callback)
+
+def _trace_vdelete_compat(self, mode, cbname):
+    self.trace_remove(_TRACE_MODE_TO_NEW.get(mode, mode), cbname)
+
+def _trace_vinfo_compat(self):
+    return [(_TRACE_MODE_TO_OLD.get(m[0], m[0]) if len(m) == 1 else m, cb)
+            for m, cb in self.trace_info()]
+
+tkinter.Variable.trace_variable = _trace_variable_compat
+tkinter.Variable.trace = _trace_compat
+tkinter.Variable.trace_vdelete = _trace_vdelete_compat
+tkinter.Variable.trace_vinfo = _trace_vinfo_compat
 
 # Patch Utils.prgpath before bCNC reads it — it sets prgpath = dirname(__file__)
 # at import time which resolves to MacOS/, but assets live in Resources/bCNC/
@@ -459,7 +736,12 @@ PLISTEOF
 success "Entitlements written"
 
 # ── 11. Write PyInstaller hooks ───────────────────────────────────────────────
+# Always start from a clean directory -- it's generated output, not tracked by
+# git, so a stale hook file left over from a previous version of this script
+# (e.g. an old hook-cv2.py) would otherwise silently keep shadowing the
+# correct hook from pyinstaller-hooks-contrib on every subsequent run.
 info "Writing hooks..."
+rm -rf "${SCRIPT_DIR}/hooks"
 mkdir -p "${SCRIPT_DIR}/hooks"
 
 cat > "${SCRIPT_DIR}/hooks/hook-bCNC.py" << 'HOOKEOF'
@@ -468,11 +750,15 @@ datas = collect_data_files('bCNC', includes=['**/*'])
 hiddenimports = collect_submodules('bCNC')
 HOOKEOF
 
-cat > "${SCRIPT_DIR}/hooks/hook-cv2.py" << 'HOOKEOF'
-from PyInstaller.utils.hooks import collect_dynamic_libs, collect_data_files
-binaries = collect_dynamic_libs('cv2')
-datas    = collect_data_files('cv2')
-HOOKEOF
+# No custom hook-cv2.py here: cv2's own loader does sys.path module-substitution
+# tricks in cv2/__init__.py that are incompatible with PyInstaller's default
+# frozen-import mechanism ("recursion detected during loading of cv2 binary
+# extensions"). pyinstaller-hooks-contrib ships a hook that sets
+# module_collection_mode='py' (collecting cv2 as loose files instead of baking
+# it into the frozen archive) plus correctly locates the native extension --
+# PyInstaller auto-discovers it via that package's entry points, and a
+# same-named file in our own hookspath would shadow it, so we deliberately
+# don't write one.
 success "Hooks written"
 
 # ── 12. Write PyInstaller spec ────────────────────────────────────────────────
@@ -511,9 +797,8 @@ hidden = [
     'PIL.BmpImagePlugin', 'PIL.PngImagePlugin',
     'PIL.JpegImagePlugin', 'PIL.GifImagePlugin', 'PIL.ImageFont',
     'numpy', 'numpy.core',
-    'svgelements', 'shxparser',
     'configparser', 'queue', 'threading', 'socket', 'http.server',
-] + collect_submodules('bCNC')
+] + collect_submodules('bCNC') + collect_submodules('svgelements') + collect_submodules('shxparser')
 
 a = Analysis(
     ['${SCRIPT_DIR}/bcnc_launcher.py'],
@@ -565,7 +850,7 @@ app = BUNDLE(
         'CFBundlePackageType': 'APPL',
         'NSHighResolutionCapable': True,
         'NSCameraUsageDescription': 'bCNC uses the camera for workpiece alignment via the Camera module.',
-        'LSMinimumSystemVersion': '11.0',
+        'LSMinimumSystemVersion': '${MACOS_MIN}',
         'NSPrincipalClass': 'NSApplication',
         'NSAppSleepDisabled': True,   # disable App Nap (GUI freezes until refocus)
         'NSDocumentTypes': [{
@@ -591,11 +876,20 @@ APP_BUNDLE="${DIST_DIR}/bCNC.app"
 success "bCNC.app built"
 
 # ── 14. Ad-hoc code sign ──────────────────────────────────────────────────────
+# On arm64, macOS refuses to exec a binary without a valid signature at all —
+# an app that fails to sign here will "flash and vanish" with no error dialog
+# and no crash log, since it's killed by the kernel before main() ever runs.
+# So a signing failure is fatal, not a warning to skip past.
 info "Code signing (ad-hoc)..."
 codesign --deep --force --sign - \
     --entitlements "${SCRIPT_DIR}/entitlements.plist" \
     --options runtime \
-    "${APP_BUNDLE}" && success "Signed" || warn "codesign failed — camera may need manual Privacy approval"
+    "${APP_BUNDLE}" || die "codesign failed — the app will not launch without a valid signature (especially on arm64)."
+
+info "Verifying code signature..."
+codesign --verify --deep --strict "${APP_BUNDLE}" \
+    || die "codesign verification failed after signing — the app will not launch."
+success "Signed and verified"
 
 # ── 15. Build DMG ─────────────────────────────────────────────────────────────
 info "Building DMG..."
@@ -620,6 +914,21 @@ create-dmg \
 
 success "DMG created: ${DMG_OUT}  ($(du -sh "$DMG_OUT" | cut -f1))"
 
+# ── 16. Install straight to /Applications ────────────────────────────────────
+# Never force-quit a running bCNC -- it may be mid-job controlling real
+# hardware. Only auto-install when it isn't currently running; otherwise
+# leave the DMG for a manual drag-install and say why.
+INSTALLED=0
+info "Installing to /Applications..."
+if pgrep -f "${APP_NAME}.app/Contents/MacOS/${APP_NAME}" >/dev/null 2>&1; then
+    warn "bCNC is currently running -- quit it first, then re-run this script (or drag from the DMG) to install the new build."
+else
+    rm -rf "/Applications/${APP_NAME}.app"
+    cp -R "${APP_BUNDLE}" "/Applications/"
+    success "Installed to /Applications/${APP_NAME}.app"
+    INSTALLED=1
+fi
+
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════╗"
 echo    "║   Build complete!                                ║"
@@ -627,8 +936,14 @@ echo -e "╚══════════════════════�
 echo ""
 echo "  Output: ${DMG_OUT}"
 echo ""
-echo -e "${YELLOW}First launch:${NC}"
-echo "  1. Open the DMG and drag bCNC.app → Applications"
-echo "  2. Right-click bCNC.app → Open  (bypasses Gatekeeper, once only)"
-echo "  3. Allow camera access when prompted"
+if [[ "$INSTALLED" -eq 1 ]]; then
+    echo -e "${YELLOW}Installed to /Applications/bCNC.app.${NC}"
+    echo "  First launch: right-click bCNC.app → Open  (bypasses Gatekeeper, once only)"
+    echo "  Allow camera access when prompted."
+else
+    echo -e "${YELLOW}First launch:${NC}"
+    echo "  1. Open the DMG and drag bCNC.app → Applications"
+    echo "  2. Right-click bCNC.app → Open  (bypasses Gatekeeper, once only)"
+    echo "  3. Allow camera access when prompted"
+fi
 echo ""
