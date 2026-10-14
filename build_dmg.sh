@@ -607,29 +607,32 @@ else
     warn "Could not find the camera index field to patch (bCNC internals may have changed) -- leaving free-text camera index field"
 fi
 
-# ── 7f. Zoom via a timer instead of after_idle ───────────────────────────────
-# CNCCanvas.zoomCanvas() (Cmd-+/-, the magnifier buttons, the mouse wheel)
-# defers the real work with after_idle(). On macOS Tk, idle callbacks can fail
-# to run until another event wakes the loop, so those zooms did nothing while
-# "zoom to fit" (which calls _zoomCanvas directly) worked. A 1ms timer fires
-# reliably, and the accumulated-zoom batching in zoomCanvas is unchanged.
-info "Making canvas zoom independent of Tk idle callbacks..."
-if grep -q 'self.after_idle(self._zoomCanvas)' "$CNCCANVAS_PATH"; then
+# ── 7f. Fix Cmd-+/- and magnifier zoom crashing on canvas width "10c" ────────
+# CNCCanvas.menuZoomIn/menuZoomOut do int(self.cget("width")), but the canvas
+# is created with width="10c" (a Tk screen distance), so cget returns the
+# string '10c' and int() raises ValueError -- the zoom does nothing and an
+# error is logged each time (all reported when the app is closed). Use the
+# widget's real pixel size instead.
+info "Fixing canvas zoom-in/zoom-out buttons..."
+if grep -q 'x = int(self.cget("width")) // 2' "$CNCCANVAS_PATH"; then
     "$PY" - "$CNCCANVAS_PATH" << 'PATCHEOF'
 import sys
 path = sys.argv[1]
 with open(path) as f:
     src = f.read()
 patched = src.replace(
-    "self.after_idle(self._zoomCanvas)",
-    "self.after(1, self._zoomCanvas)",
+    'x = int(self.cget("width")) // 2',
+    'x = self.winfo_width() // 2',
+).replace(
+    'y = int(self.cget("height")) // 2',
+    'y = self.winfo_height() // 2',
 )
 with open(path, "w") as f:
     f.write(patched)
 PATCHEOF
-    success "Canvas zoom patched"
+    success "Canvas zoom buttons fixed"
 else
-    warn "Could not find zoomCanvas's after_idle to patch (bCNC internals may have changed) -- Cmd-+/- and magnifier zoom may not work"
+    warn "Could not find menuZoomIn/Out's cget('width') to patch (bCNC internals may have changed) -- magnifier zoom may still fail"
 fi
 
 # ── 7g. Make the grid visible ────────────────────────────────────────────────
