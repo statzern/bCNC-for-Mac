@@ -58,13 +58,21 @@ else
     NATIVE_PREFIX="/usr/local"
 fi
 
-info "Locating a native ${ARCH} Python 3.11–3.14..."
+info "Locating a native ${ARCH} Python 3.11–3.14 (preferring Tk 8.6)..."
 IFS=':' read -ra PATH_DIRS <<< "$PATH"
-SEARCH_DIRS=("${NATIVE_PREFIX}/bin" "${PATH_DIRS[@]}")
+# python.org's framework installer bundles Tk 8.6; Homebrew's python-tk now
+# ships Tk 9.0, which has macOS event-loop/redraw bugs (GUI stalls until the
+# window is re-activated). So Tk 8.6 Pythons are tried first.
+FRAMEWORK_DIRS=()
+for v in 3.13 3.12 3.11 3.14; do
+    FRAMEWORK_DIRS+=("/Library/Frameworks/Python.framework/Versions/${v}/bin")
+done
+SEARCH_DIRS=("${FRAMEWORK_DIRS[@]}" "${NATIVE_PREFIX}/bin" "${PATH_DIRS[@]}")
 
 PYTHON=""
 FOUND_WRONG_ARCH=""
-for candidate in python3.13 python3.12 python3.14 python3.11; do
+for tk_pass in tk86 any; do
+  for candidate in python3.13 python3.12 python3.14 python3.11; do
     for dir in "${SEARCH_DIRS[@]}"; do
         bin="${dir}/${candidate}"
         [[ -x "$bin" ]] || continue
@@ -72,14 +80,23 @@ for candidate in python3.13 python3.12 python3.14 python3.11; do
         major="${ver%%.*}"; minor="${ver##*.}"
         [[ "$major" -eq 3 && "$minor" -ge 11 && "$minor" -le 14 ]] || continue
         py_arch=$("$bin" -c "import platform; print(platform.machine())" 2>/dev/null)
-        if [[ "$py_arch" == "$ARCH" ]]; then
-            PYTHON="$bin"
-            info "Using native Python: $PYTHON ($ver, ${py_arch})"
-            break 2
-        else
+        if [[ "$py_arch" != "$ARCH" ]]; then
             FOUND_WRONG_ARCH="${bin} (${py_arch})"
+            continue
         fi
+        tkver=$("$bin" -c "import tkinter; print(tkinter.TkVersion)" 2>/dev/null) || continue
+        if [[ "$tk_pass" == "tk86" && "$tkver" != 8.* ]]; then
+            continue
+        fi
+        PYTHON="$bin"
+        info "Using native Python: $PYTHON ($ver, ${py_arch}, Tk ${tkver})"
+        if [[ "$tkver" != 8.* ]]; then
+            warn "Tk ${tkver} has known macOS freezes (GUI hangs until re-activated)."
+            warn "For a stable GUI install python.org's Python 3.12 (bundles Tk 8.6) and rebuild."
+        fi
+        break 3
     done
+  done
 done
 
 if [[ -z "$PYTHON" ]]; then
