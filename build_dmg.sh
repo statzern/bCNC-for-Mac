@@ -607,6 +607,31 @@ else
     warn "Could not find the camera index field to patch (bCNC internals may have changed) -- leaving free-text camera index field"
 fi
 
+# ── 7f. Zoom via a timer instead of after_idle ───────────────────────────────
+# CNCCanvas.zoomCanvas() (Cmd-+/-, the magnifier buttons, the mouse wheel)
+# defers the real work with after_idle(). On macOS Tk, idle callbacks can fail
+# to run until another event wakes the loop, so those zooms did nothing while
+# "zoom to fit" (which calls _zoomCanvas directly) worked. A 1ms timer fires
+# reliably, and the accumulated-zoom batching in zoomCanvas is unchanged.
+info "Making canvas zoom independent of Tk idle callbacks..."
+if grep -q 'self.after_idle(self._zoomCanvas)' "$CNCCANVAS_PATH"; then
+    "$PY" - "$CNCCANVAS_PATH" << 'PATCHEOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+patched = src.replace(
+    "self.after_idle(self._zoomCanvas)",
+    "self.after(1, self._zoomCanvas)",
+)
+with open(path, "w") as f:
+    f.write(patched)
+PATCHEOF
+    success "Canvas zoom patched"
+else
+    warn "Could not find zoomCanvas's after_idle to patch (bCNC internals may have changed) -- Cmd-+/- and magnifier zoom may not work"
+fi
+
 # ── 8. Generate icon ──────────────────────────────────────────────────────────
 info "Generating icon..."
 mkdir -p "${BUILD_DIR}"
