@@ -729,6 +729,65 @@ def _disable_app_nap():
 
 _disable_app_nap()
 
+# Hang watchdog: a Tk after() heartbeat on the main loop plus a background
+# thread that notices when the heartbeat stops. On a stall it appends every
+# thread's stack to ~/bCNC-hang.log. If the main thread is parked in
+# mainloop() the Tk event loop simply isn't dispatching (Tk/macOS issue); if
+# it's inside bCNC code, that code is blocking the UI.
+def _install_hang_watchdog():
+    try:
+        import threading, time, traceback, tkinter
+        logpath = os.path.expanduser('~/bCNC-hang.log')
+        state = {'beat': time.monotonic(), 'started': False}
+
+        def log(msg):
+            try:
+                with open(logpath, 'a') as f:
+                    f.write(msg + '\n')
+            except Exception:
+                pass
+
+        def beat(root):
+            state['beat'] = time.monotonic()
+            try:
+                root.after(200, beat, root)
+            except Exception:
+                pass
+
+        def watch(main_id, tkver):
+            stalled_since = None
+            while True:
+                time.sleep(0.5)
+                gap = time.monotonic() - state['beat']
+                if gap > 2.0 and stalled_since is None:
+                    stalled_since = time.strftime('%Y-%m-%d %H:%M:%S')
+                    out = ['=== UI stall detected %s (Tk %s) ===' % (stalled_since, tkver)]
+                    for tid, frame in sys._current_frames().items():
+                        out.append('-- thread %s%s' % (tid, ' (MAIN)' if tid == main_id else ''))
+                        out.extend(l.rstrip() for l in traceback.format_stack(frame))
+                    log('\n'.join(out))
+                elif gap <= 2.0 and stalled_since is not None:
+                    log('=== UI recovered (stalled since %s, ~%.1fs) ===' % (stalled_since, gap))
+                    stalled_since = None
+
+        orig_init = tkinter.Tk.__init__
+
+        def patched_init(self, *a, **k):
+            orig_init(self, *a, **k)
+            if not state['started']:
+                state['started'] = True
+                self.after(200, beat, self)
+                threading.Thread(
+                    target=watch,
+                    args=(threading.get_ident(), tkinter.TkVersion),
+                    daemon=True).start()
+
+        tkinter.Tk.__init__ = patched_init
+    except Exception:
+        pass
+
+_install_hang_watchdog()
+
 from bCNC.__main__ import main
 sys.exit(main())
 PYEOF
