@@ -85,11 +85,12 @@ for tk_pass in tk86 any; do
             continue
         fi
         tkver=$("$bin" -c "import tkinter; print(tkinter.TkVersion)" 2>/dev/null) || continue
+        tkpatch=$("$bin" -c "import tkinter; print(tkinter.Tcl().eval('info patchlevel'))" 2>/dev/null || echo "$tkver")
         if [[ "$tk_pass" == "tk86" && "$tkver" != 8.* ]]; then
             continue
         fi
         PYTHON="$bin"
-        info "Using native Python: $PYTHON ($ver, ${py_arch}, Tk ${tkver})"
+        info "Using native Python: $PYTHON ($ver, ${py_arch}, Tk ${tkpatch})"
         if [[ "$tkver" != 8.* ]]; then
             warn "Tk ${tkver} has known macOS freezes (GUI hangs until re-activated)."
             warn "For a stable GUI install python.org's Python 3.12 (bundles Tk 8.6) and rebuild."
