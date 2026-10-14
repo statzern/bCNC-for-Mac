@@ -635,6 +635,37 @@ else
     warn "Could not find menuZoomIn/Out's cget('width') to patch (bCNC internals may have changed) -- magnifier zoom may still fail"
 fi
 
+# ── 7h. Trackpad / wheel zoom in both directions ─────────────────────────────
+# CNCCanvas.wheel() does pow(ZOOM, event.delta // 120). Windows reports wheel
+# deltas in multiples of 120, but macOS reports small values (+/-1..~10).
+# Floor division then turns +1 into 0 (no zoom in) and -1 into -1 (zoom out),
+# so scrolling only ever zoomed out. Scale the delta smoothly instead, with
+# the per-event step capped so a fast flick can't jump wildly.
+info "Fixing trackpad/wheel zoom direction..."
+if grep -q 'pow(ZOOM, (event.delta // 120))' "$CNCCANVAS_PATH"; then
+    "$PY" - "$CNCCANVAS_PATH" << 'PATCHEOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+patched = src.replace(
+    "self.zoomCanvas(event.x, event.y, pow(ZOOM, (event.delta // 120)))",
+    "d = event.delta\n"
+    "        if abs(d) >= 120:  # Windows-style wheel notches\n"
+    "            steps = d / 120.0\n"
+    "        else:  # macOS trackpad / wheel: small signed deltas\n"
+    "            steps = d / 4.0\n"
+    "        steps = max(-3.0, min(3.0, steps))\n"
+    "        self.zoomCanvas(event.x, event.y, pow(ZOOM, steps))",
+)
+with open(path, "w") as f:
+    f.write(patched)
+PATCHEOF
+    success "Wheel zoom fixed"
+else
+    warn "Could not find wheel() zoom line to patch (bCNC internals may have changed) -- trackpad zoom unchanged"
+fi
+
 # ── 7g. Make the grid visible ────────────────────────────────────────────────
 # CNCCanvas.drawGrid() only spans the bounding box of the loaded G-code, which
 # is an empty range when nothing is loaded (so no grid at all), and it uses a
