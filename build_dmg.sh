@@ -709,6 +709,39 @@ else
     warn "Could not find drawGrid to patch (bCNC internals may have changed) -- grid unchanged"
 fi
 
+# ── 7i. Don't open the serial port (and its error popup) before the window exists
+# bmain.Application.__init__ auto-opens the serial port when "open serial on
+# startup" is enabled. If the machine isn't plugged in, that raises a modal
+# "Error opening serial" dialog *during __init__*, before the main window has
+# been drawn or mainloop() started. On macOS the native modal alert blocks the
+# first draw, leaving a blank grey main window behind the popup. Defer the
+# auto-open until the event loop is running and the window has been drawn.
+info "Deferring startup serial auto-open until the window is drawn..."
+if grep -q '            self.openClose()' "$BMAIN_PATH" \
+   && grep -q 'if _openserial and Utils.getBool("Connection", "openserial"):' "$BMAIN_PATH"; then
+    "$PY" - "$BMAIN_PATH" << 'PATCHEOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+old = (
+    'if _openserial and Utils.getBool("Connection", "openserial"):\n'
+    '            self.openClose()\n'
+)
+new = (
+    'if _openserial and Utils.getBool("Connection", "openserial"):\n'
+    '            self.update_idletasks()\n'
+    '            self.after(800, self.openClose)\n'
+)
+assert old in src
+with open(path, "w") as f:
+    f.write(src.replace(old, new, 1))
+PATCHEOF
+    success "Serial auto-open deferred"
+else
+    warn "Could not find the startup serial auto-open to patch (bCNC internals may have changed) -- an unplugged machine may show its error before the window draws"
+fi
+
 # ── 8. Generate icon ──────────────────────────────────────────────────────────
 info "Generating icon..."
 mkdir -p "${BUILD_DIR}"
