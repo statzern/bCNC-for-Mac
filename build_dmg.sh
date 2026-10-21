@@ -1041,6 +1041,47 @@ def _install_hang_watchdog():
 
 _install_hang_watchdog()
 
+# bCNC opens many modal windows with wait_visibility() + grab_set() (error
+# reporter, input dialogs, combobox popups, tool dialogs...). On macOS Tk,
+# wait_visibility() can block forever and grab_set() raises "window not
+# viewable" if the window isn't mapped yet. Make both tolerant everywhere:
+# wait (bounded) for the window to map, and treat a failed grab as non-fatal.
+def _harden_tk_waits():
+    try:
+        import tkinter
+
+        def wait_visibility(self, window=None):
+            w = window if window is not None else self
+            try:
+                w.update()
+                for _i in range(40):
+                    if w.winfo_viewable():
+                        break
+                    w.after(25)
+                    w.update()
+            except tkinter.TclError:
+                pass
+
+        _orig_grab_set = tkinter.Misc.grab_set
+
+        def grab_set(self):
+            try:
+                _orig_grab_set(self)
+            except tkinter.TclError:
+                try:
+                    self.update_idletasks()
+                    _orig_grab_set(self)
+                except tkinter.TclError:
+                    pass
+
+        tkinter.Misc.wait_visibility = wait_visibility
+        tkinter.Misc.tkwait_visibility = wait_visibility
+        tkinter.Misc.grab_set = grab_set
+    except Exception:
+        pass
+
+_harden_tk_waits()
+
 from bCNC.__main__ import main
 sys.exit(main())
 PYEOF
