@@ -790,8 +790,43 @@ new = (
     "        return self.selFile\n"
 )
 assert old in src
+src = src.replace(old, new, 1)
+
+# resize(): restoring the saved pane positions called paneframe.update()
+# (which re-enters the event loop and re-fires this very <Configure>
+# handler) *before* clearing FileDialog.sash, so on every 2nd+ open of the
+# dialog it could recurse/stall -- the "UI hangs when opening another file"
+# bug. Clear the saved value first and avoid the nested update().
+old_resize = (
+    "        if FileDialog.sash is not None:\n"
+    "            FileDialog.sash.reverse()\n"
+    "            # XXX XXX ERROR: paneframe doesn't update the width/height\n"
+    "            # so all sash placement is wrong\n"
+    "            self.fileList.paneframe.update()\n"
+    "            # self.fileList.paneframe.update_idletasks()\n"
+    "            if FileDialog.sash is not None:\n"
+    "                n = len(FileDialog.sash) - 1\n"
+    "                for i, x in enumerate(FileDialog.sash):\n"
+    "                    self.fileList.paneframe.sash_place(n - i, x, 1)\n"
+    "                FileDialog.sash = None\n"
+)
+new_resize = (
+    "        if FileDialog.sash is not None:\n"
+    "            sash = FileDialog.sash\n"
+    "            FileDialog.sash = None  # clear first: guards re-entrancy\n"
+    "            sash.reverse()\n"
+    "            try:\n"
+    "                self.fileList.paneframe.update_idletasks()\n"
+    "                n = len(sash) - 1\n"
+    "                for i, x in enumerate(sash):\n"
+    "                    self.fileList.paneframe.sash_place(n - i, x, 1)\n"
+    "            except TclError:\n"
+    "                pass\n"
+)
+assert old_resize in src
+src = src.replace(old_resize, new_resize, 1)
 with open(path, "w") as f:
-    f.write(src.replace(old, new, 1))
+    f.write(src)
 PATCHEOF
     success "File dialog hardened"
 else
@@ -972,10 +1007,12 @@ def _install_hang_watchdog():
 
         def watch(main_id, tkver):
             stalled_since = None
+            stalled_at = 0.0
             while True:
                 time.sleep(0.5)
                 gap = time.monotonic() - state['beat']
                 if gap > 2.0 and stalled_since is None:
+                    stalled_at = time.monotonic() - gap
                     stalled_since = time.strftime('%Y-%m-%d %H:%M:%S')
                     out = ['=== UI stall detected %s (Tk %s) ===' % (stalled_since, tkver)]
                     for tid, frame in sys._current_frames().items():
@@ -983,7 +1020,7 @@ def _install_hang_watchdog():
                         out.extend(l.rstrip() for l in traceback.format_stack(frame))
                     log('\n'.join(out))
                 elif gap <= 2.0 and stalled_since is not None:
-                    log('=== UI recovered (stalled since %s, ~%.1fs) ===' % (stalled_since, gap))
+                    log('=== UI recovered (stalled since %s, %.1fs) ===' % (stalled_since, time.monotonic() - stalled_at))
                     stalled_since = None
 
         orig_init = tkinter.Tk.__init__
