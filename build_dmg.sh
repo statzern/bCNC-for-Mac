@@ -742,6 +742,87 @@ else
     warn "Could not find the startup serial auto-open to patch (bCNC internals may have changed) -- an unplugged machine may show its error before the window draws"
 fi
 
+# ── 7j. Make the Open/Save file dialog robust on macOS ───────────────────────
+# bFileDialog.FileDialog.show() does wait_visibility() + grab_set() and
+# swallows any TclError. On macOS Tk, wait_visibility() can block forever and
+# grab_set() fails if the window isn't mapped yet; the swallowed error left the
+# dialog alive/ungrabbed and FileDialog._active stuck True, so every later
+# Open silently did nothing and the app seemed unresponsive. Wait (bounded) for
+# the window to map, tolerate a failed grab, and always clear _active and
+# destroy a leftover dialog.
+info "Hardening the file Open/Save dialog..."
+BFILEDIALOG_PATH="${BCNC_PATH}/lib/bFileDialog.py"
+if grep -q 'self.wait_visibility()' "$BFILEDIALOG_PATH"; then
+    "$PY" - "$BFILEDIALOG_PATH" << 'PATCHEOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+old = (
+    "            self.wait_visibility()\n"
+    "            self.grab_set()\n"
+    "            self.wait_window()\n"
+    "        except TclError:\n"
+    "            pass\n"
+    "        return self.selFile\n"
+)
+new = (
+    "            self.update()\n"
+    "            for _i in range(40):  # bounded wait for the window to map\n"
+    "                if self.winfo_viewable():\n"
+    "                    break\n"
+    "                self.after(25)\n"
+    "                self.update()\n"
+    "            try:\n"
+    "                self.grab_set()\n"
+    "            except TclError:\n"
+    "                pass\n"
+    "            self.wait_window()\n"
+    "        except TclError:\n"
+    "            pass\n"
+    "        finally:\n"
+    "            FileDialog._active = False\n"
+    "            try:\n"
+    "                if self.winfo_exists():\n"
+    "                    self.destroy()\n"
+    "            except TclError:\n"
+    "                pass\n"
+    "        return self.selFile\n"
+)
+assert old in src
+with open(path, "w") as f:
+    f.write(src.replace(old, new, 1))
+PATCHEOF
+    success "File dialog hardened"
+else
+    warn "Could not find FileDialog.show() to patch (bCNC internals may have changed) -- file dialog unchanged"
+fi
+
+# ── 7k. Skip the startup "check for updates" dialog ──────────────────────────
+# __main__.main() opens Updates.CheckUpdateDialog (which does a modal
+# wait_window) *before* mainloop() whenever no check has been recorded, i.e.
+# on first launch and again after every 30 days. It blocks start-up behind a
+# modal window, and checks upstream bCNC releases, which is meaningless for
+# this repackaged build.
+info "Skipping the startup update-check dialog..."
+BCNC_MAIN_PATH="${BCNC_PATH}/__main__.py"
+if grep -q 'if Updates.need2Check():' "$BCNC_MAIN_PATH"; then
+    "$PY" - "$BCNC_MAIN_PATH" << 'PATCHEOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+old = "    if Updates.need2Check():\n        application.checkUpdates()\n"
+new = "    # (startup update check disabled by build_dmg.sh)\n"
+assert old in src
+with open(path, "w") as f:
+    f.write(src.replace(old, new, 1))
+PATCHEOF
+    success "Startup update check disabled"
+else
+    warn "Could not find the startup update check to patch (bCNC internals may have changed) -- update dialog may still appear at launch"
+fi
+
 # ── 8. Generate icon ──────────────────────────────────────────────────────────
 info "Generating icon..."
 mkdir -p "${BUILD_DIR}"
